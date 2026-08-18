@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+venv/
+__pycache__/
+*.pyc
+
+# Environment Variables (NEVER UPLOAD THESE!)
+.env
+.env.local
+.env.production
+
+# Build files
+build/
+dist/
+
+# Logs and OS files
+*.log
+.DS_Store

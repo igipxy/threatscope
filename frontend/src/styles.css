@@ -19,6 +19,7 @@ button { font: inherit; }
 form button { padding: 0 28px; border: 0; border-radius: 8px; background: #70f5b4; color: #06110d; font-weight: 900; cursor: pointer; }
 button:disabled { opacity: .6; }
 .error { color: #ff8585; }
+.scan-note { margin-top: 12px; color: #71827b; font-size: 13px; line-height: 1.5; }
 .result { display: grid; grid-template-columns: 1fr auto; gap: 32px; padding: 34px; border: 1px solid #315247; border-radius: 16px; background: rgba(12, 25, 21, .8); }
 .result h2 { margin: 8px 0; word-break: break-all; }
 .result p { color: #aebdb7; }

@@ -1,25 +1,37 @@
+import base64
 import hashlib
 import ipaddress
 import re
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Literal
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .models import Finding, ScanRequest, ScanResult
+from .storage import initialize_database, list_scans, save_scan
 
 
 class Settings(BaseSettings):
     virustotal_api_key: str = ""
     frontend_origin: str = "http://localhost:5173"
+    database_path: str = "threatscope.db"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 settings = Settings()
-app = FastAPI(title="ThreatScope API", version="0.1.0")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    initialize_database(settings.database_path)
+    yield
+
+
+app = FastAPI(title="ThreatScope API", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin],
@@ -27,27 +39,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-class ScanRequest(BaseModel):
-    target: str = Field(min_length=3, max_length=2048)
-
-
-class Finding(BaseModel):
-    label: str
-    severity: Literal["info", "low", "medium", "high"]
-    detail: str
-
-
-class ScanResult(BaseModel):
-    id: str
-    target: str
-    target_type: Literal["url", "domain", "ip"]
-    score: int
-    verdict: Literal["clean", "suspicious", "malicious"]
-    provider: str
-    scanned_at: datetime
-    findings: list[Finding]
 
 
 def classify_target(value: str) -> tuple[str, str]:
@@ -62,9 +53,9 @@ def classify_target(value: str) -> tuple[str, str]:
     host = parsed.hostname
     if not host or "." not in host:
         raise HTTPException(status_code=422, detail="Enter a valid URL, domain, or IP address.")
-    if "://" in value:
-        return "url", value
-    return "domain", host
+    if parsed.scheme not in {"http", "https"}:
+        raise HTTPException(status_code=422, detail="Only HTTP and HTTPS URLs can be scanned.")
+    return ("url", value) if "://" in value else ("domain", host)
 
 
 def demo_scan(target: str, target_type: str) -> tuple[int, list[Finding]]:
@@ -94,10 +85,11 @@ def demo_scan(target: str, target_type: str) -> tuple[int, list[Finding]]:
 
 async def virustotal_scan(target: str, target_type: str) -> tuple[int, list[Finding]]:
     endpoint_type = "urls" if target_type == "url" else ("domains" if target_type == "domain" else "ip_addresses")
-    identifier = httpx.URL(target).raw_path.decode().strip("/") if target_type == "url" else target
-    if target_type == "url":
-        import base64
-        identifier = base64.urlsafe_b64encode(target.encode()).decode().strip("=")
+    identifier = (
+        base64.urlsafe_b64encode(target.encode()).decode().strip("=")
+        if target_type == "url"
+        else target
+    )
 
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(
@@ -124,12 +116,22 @@ async def virustotal_scan(target: str, target_type: str) -> tuple[int, list[Find
     return score, findings
 
 
+@app.get("/")
+def root():
+    return {"name": "ThreatScope API", "docs": "/docs", "health": "/health"}
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "provider": "virustotal" if settings.virustotal_api_key else "demo"}
 
 
-@app.post("/api/scans", response_model=ScanResult)
+@app.get("/api/scans", response_model=list[ScanResult])
+def recent_scans(limit: int = Query(default=20, ge=1, le=100)):
+    return list_scans(settings.database_path, limit)
+
+
+@app.post("/api/scans", response_model=ScanResult, status_code=201)
 async def create_scan(payload: ScanRequest):
     target_type, normalized = classify_target(payload.target)
     if settings.virustotal_api_key:
@@ -142,7 +144,7 @@ async def create_scan(payload: ScanRequest):
     verdict = "malicious" if score >= 70 else ("suspicious" if score >= 30 else "clean")
     scanned_at = datetime.now(timezone.utc)
     scan_id = hashlib.sha256(f"{normalized}:{scanned_at.isoformat()}".encode()).hexdigest()[:12]
-    return ScanResult(
+    result = ScanResult(
         id=scan_id,
         target=normalized,
         target_type=target_type,
@@ -152,3 +154,5 @@ async def create_scan(payload: ScanRequest):
         scanned_at=scanned_at,
         findings=findings,
     )
+    save_scan(settings.database_path, result)
+    return result

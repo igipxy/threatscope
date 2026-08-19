@@ -45,7 +45,7 @@ function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ target }),
-        signal: AbortSignal.timeout(20000),
+        signal: AbortSignal.timeout(35000),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Scan failed");
@@ -68,10 +68,11 @@ function App() {
         <h1>See the risk<br />behind the link.</h1>
         <p className="intro">Inspect a URL, domain, or IP address for security signals and get a clear, explainable verdict.</p>
         <form onSubmit={scan}>
-          <input required value={target} onChange={(e) => setTarget(e.target.value)} placeholder="example.com or https://example.com" aria-label="Scan target" />
+          <input required value={target} onChange={(e) => setTarget(e.target.value)} placeholder="https://example.com/path" aria-label="Scan target" />
           <button disabled={loading}>{loading ? "ANALYZING…" : "SCAN TARGET"}</button>
         </form>
         {error && <p className="error">{error}</p>}
+        <p className="scan-note">Full URLs receive structural and DNS checks. With a VirusTotal key, unknown URLs are submitted for live engine analysis.</p>
       </section>
 
       {result && (

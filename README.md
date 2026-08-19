@@ -5,11 +5,14 @@ ThreatScope is an original threat-intelligence dashboard for inspecting URLs, do
 ## Current MVP
 
 - URL, domain, and IP input validation
+- URL normalization with fragments and embedded credentials removed
+- Structural phishing checks for punycode, credential tricks, suspicious wording, encoding, ports, and deep subdomains
+- DNS resolution checks and blocking for local, private, and reserved networks
 - Risk score from 0–100
 - Clean, suspicious, or malicious verdict
 - Explainable findings rather than a black-box result
 - Local demo analysis when no API key is configured
-- VirusTotal API v3 lookup when a key is configured
+- VirusTotal API v3 report lookup and live submission when a key is configured
 - Persistent SQLite scan history
 - Responsive React dashboard
 - FastAPI backend with interactive API documentation
@@ -44,6 +47,8 @@ VIRUSTOTAL_API_KEY=your_key_here
 ```
 
 Never commit the `.env` file.
+
+When a VirusTotal key is enabled, unknown URLs are submitted to VirusTotal for live analysis. Do not submit private or confidential URLs. ThreatScope does not open the target page or execute its content.
 
 ### Frontend
 

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import ipaddress
@@ -13,6 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models import Finding, ScanRequest, ScanResult
 from .storage import initialize_database, list_scans, save_scan
+from .url_analysis import analyze_url_structure, check_dns, normalize_url
 
 
 class Settings(BaseSettings):
@@ -49,13 +51,14 @@ def classify_target(value: str) -> tuple[str, str]:
     except ValueError:
         pass
 
-    parsed = urlparse(value if "://" in value else f"https://{value}")
+    if "://" in value:
+        return "url", normalize_url(value)
+
+    parsed = urlparse(f"https://{value}")
     host = parsed.hostname
     if not host or "." not in host:
         raise HTTPException(status_code=422, detail="Enter a valid URL, domain, or IP address.")
-    if parsed.scheme not in {"http", "https"}:
-        raise HTTPException(status_code=422, detail="Only HTTP and HTTPS URLs can be scanned.")
-    return ("url", value) if "://" in value else ("domain", host)
+    return "domain", host.lower()
 
 
 def demo_scan(target: str, target_type: str) -> tuple[int, list[Finding]]:
@@ -83,6 +86,37 @@ def demo_scan(target: str, target_type: str) -> tuple[int, list[Finding]]:
     return min(score, 100), findings
 
 
+async def local_analysis(target: str, target_type: str) -> tuple[int, list[Finding]]:
+    if target_type != "url":
+        return demo_scan(target, target_type)
+
+    score, findings = analyze_url_structure(target, target)
+    hostname = urlparse(target).hostname or ""
+    findings.append(await check_dns(hostname))
+    return score, findings
+
+
+def analysis_stats(payload: dict) -> dict:
+    return payload.get("data", {}).get("attributes", {}).get("stats", {})
+
+
+def provider_result(stats: dict) -> tuple[int, list[Finding]]:
+    malicious = int(stats.get("malicious", 0))
+    suspicious = int(stats.get("suspicious", 0))
+    harmless = int(stats.get("harmless", 0))
+    undetected = int(stats.get("undetected", 0))
+    total = sum(int(value) for value in stats.values()) or 1
+    score = min(100, round(((malicious + suspicious * 0.5) / total) * 100))
+    severity = "high" if malicious else ("medium" if suspicious else "info")
+    return score, [
+        Finding(
+            label="VirusTotal engine analysis",
+            severity=severity,
+            detail=f"{malicious} malicious, {suspicious} suspicious, {harmless} harmless, and {undetected} undetected results across {total} engines.",
+        )
+    ]
+
+
 async def virustotal_scan(target: str, target_type: str) -> tuple[int, list[Finding]]:
     endpoint_type = "urls" if target_type == "url" else ("domains" if target_type == "domain" else "ip_addresses")
     identifier = (
@@ -90,30 +124,57 @@ async def virustotal_scan(target: str, target_type: str) -> tuple[int, list[Find
         if target_type == "url"
         else target
     )
+    headers = {"x-apikey": settings.virustotal_api_key}
 
-    async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.get(
+    async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
+        report = await client.get(
             f"https://www.virustotal.com/api/v3/{endpoint_type}/{identifier}",
-            headers={"x-apikey": settings.virustotal_api_key},
+            headers=headers,
         )
-    if response.status_code == 404:
-        return demo_scan(target, target_type)
-    if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail="Threat intelligence provider is unavailable.")
+        if report.status_code == 200:
+            stats = report.json().get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
+            return provider_result(stats)
 
-    stats = response.json().get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
-    malicious = int(stats.get("malicious", 0))
-    suspicious = int(stats.get("suspicious", 0))
-    total = sum(int(value) for value in stats.values()) or 1
-    score = min(100, round(((malicious + suspicious * 0.5) / total) * 100))
-    findings = [
+        if report.status_code != 404 or target_type != "url":
+            if report.status_code == 429:
+                raise HTTPException(status_code=429, detail="VirusTotal rate limit reached. Try again later.")
+            raise HTTPException(status_code=502, detail="Threat intelligence provider could not return a report.")
+
+        submission = await client.post(
+            "https://www.virustotal.com/api/v3/urls",
+            headers=headers,
+            data={"url": target},
+        )
+        if submission.status_code == 429:
+            raise HTTPException(status_code=429, detail="VirusTotal rate limit reached. Try again later.")
+        if submission.status_code >= 400:
+            raise HTTPException(status_code=502, detail="VirusTotal could not accept this URL for analysis.")
+
+        analysis_id = submission.json().get("data", {}).get("id")
+        if not analysis_id:
+            raise HTTPException(status_code=502, detail="VirusTotal returned an invalid analysis response.")
+
+        for _ in range(5):
+            await asyncio.sleep(2)
+            analysis = await client.get(
+                f"https://www.virustotal.com/api/v3/analyses/{analysis_id}",
+                headers=headers,
+            )
+            if analysis.status_code == 429:
+                raise HTTPException(status_code=429, detail="VirusTotal rate limit reached. Try again later.")
+            if analysis.status_code >= 400:
+                raise HTTPException(status_code=502, detail="VirusTotal analysis could not be retrieved.")
+            attributes = analysis.json().get("data", {}).get("attributes", {})
+            if attributes.get("status") == "completed":
+                return provider_result(attributes.get("stats", {}))
+
+    return 0, [
         Finding(
-            label="Community engine analysis",
-            severity="high" if malicious else ("medium" if suspicious else "info"),
-            detail=f"{malicious} malicious and {suspicious} suspicious detections across {total} engines.",
+            label="VirusTotal analysis queued",
+            severity="info",
+            detail="The URL was submitted successfully, but the live engine analysis is still processing.",
         )
     ]
-    return score, findings
 
 
 @app.get("/")
@@ -134,12 +195,15 @@ def recent_scans(limit: int = Query(default=20, ge=1, le=100)):
 @app.post("/api/scans", response_model=ScanResult, status_code=201)
 async def create_scan(payload: ScanRequest):
     target_type, normalized = classify_target(payload.target)
+    local_score, findings = await local_analysis(normalized, target_type)
+    score = local_score
+    provider = "ThreatScope structural and DNS analysis"
+
     if settings.virustotal_api_key:
-        score, findings = await virustotal_scan(normalized, target_type)
-        provider = "VirusTotal"
-    else:
-        score, findings = demo_scan(normalized, target_type)
-        provider = "ThreatScope demo analysis"
+        provider_score, provider_findings = await virustotal_scan(normalized, target_type)
+        score = max(local_score, provider_score)
+        findings.extend(provider_findings)
+        provider = "ThreatScope + VirusTotal"
 
     verdict = "malicious" if score >= 70 else ("suspicious" if score >= 30 else "clean")
     scanned_at = datetime.now(timezone.utc)

@@ -1,4 +1,4 @@
-import React, { FormEvent, useState } from "react";
+import React, { FormEvent, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -14,27 +14,47 @@ type Result = {
   findings: Finding[];
 };
 
+const API_URL = "http://127.0.0.1:8000";
+
 function App() {
   const [target, setTarget] = useState("");
   const [result, setResult] = useState<Result | null>(null);
+  const [history, setHistory] = useState<Result[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  async function loadHistory() {
+    try {
+      const response = await fetch(`${API_URL}/api/scans?limit=10`, { signal: AbortSignal.timeout(8000) });
+      if (response.ok) setHistory(await response.json());
+    } catch {
+      // The scan form surfaces connection errors; history can fail quietly.
+    }
+  }
+
+  useEffect(() => {
+    loadHistory();
+  }, []);
 
   async function scan(event: FormEvent) {
     event.preventDefault();
     setError("");
     setLoading(true);
     try {
-      const response = await fetch("http://localhost:8000/api/scans", {
+      const response = await fetch(`${API_URL}/api/scans`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ target }),
+        signal: AbortSignal.timeout(35000),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Scan failed");
       setResult(data);
+      setHistory((current) => [data, ...current.filter((item) => item.id !== data.id)].slice(0, 10));
+      setTarget("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Scan failed");
+      const timedOut = err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
+      setError(timedOut ? "The backend did not respond. Confirm it is running at 127.0.0.1:8000." : err instanceof Error ? err.message : "Scan failed");
     } finally {
       setLoading(false);
     }
@@ -48,10 +68,11 @@ function App() {
         <h1>See the risk<br />behind the link.</h1>
         <p className="intro">Inspect a URL, domain, or IP address for security signals and get a clear, explainable verdict.</p>
         <form onSubmit={scan}>
-          <input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="example.com or https://example.com" aria-label="Scan target" />
+          <input required value={target} onChange={(e) => setTarget(e.target.value)} placeholder="https://example.com/path" aria-label="Scan target" />
           <button disabled={loading}>{loading ? "ANALYZING…" : "SCAN TARGET"}</button>
         </form>
         {error && <p className="error">{error}</p>}
+        <p className="scan-note">Full URLs receive structural and DNS checks. With a VirusTotal key, unknown URLs are submitted for live engine analysis.</p>
       </section>
 
       {result && (
@@ -72,6 +93,24 @@ function App() {
           </div>
         </section>
       )}
+
+      <section className="history">
+        <div className="section-heading">
+          <div><p className="eyebrow">LOCAL DATABASE</p><h2>Recent scans</h2></div>
+          <span>{history.length} stored</span>
+        </div>
+        {history.length ? (
+          <div className="history-list">
+            {history.map((item) => (
+              <button className="history-row" key={item.id} onClick={() => setResult(item)}>
+                <span className={`history-score ${item.verdict}`}>{item.score}</span>
+                <span className="history-target"><strong>{item.target}</strong><small>{item.target_type} · {new Date(item.scanned_at).toLocaleString()}</small></span>
+                <span className={`verdict ${item.verdict}`}>{item.verdict}</span>
+              </button>
+            ))}
+          </div>
+        ) : <p className="empty">Your completed scans will appear here.</p>}
+      </section>
 
       <footer>ThreatScope provides security indicators, not a guarantee of safety.</footer>
     </main>

@@ -9,6 +9,11 @@ __pycache__/
 .env.local
 .env.production
 
+# Local databases
+*.db
+*.db-shm
+*.db-wal
+
 # Build files
 build/
 dist/

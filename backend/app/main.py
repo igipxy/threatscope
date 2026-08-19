@@ -86,18 +86,14 @@ def demo_scan(target: str, target_type: str) -> tuple[int, list[Finding]]:
     return min(score, 100), findings
 
 
-async def local_analysis(target: str, target_type: str) -> tuple[int, list[Finding]]:
+async def local_analysis(original: str, target: str, target_type: str) -> tuple[int, list[Finding]]:
     if target_type != "url":
         return demo_scan(target, target_type)
 
-    score, findings = analyze_url_structure(target, target)
+    score, findings = analyze_url_structure(original, target)
     hostname = urlparse(target).hostname or ""
     findings.append(await check_dns(hostname))
     return score, findings
-
-
-def analysis_stats(payload: dict) -> dict:
-    return payload.get("data", {}).get("attributes", {}).get("stats", {})
 
 
 def provider_result(stats: dict) -> tuple[int, list[Finding]]:
@@ -106,7 +102,16 @@ def provider_result(stats: dict) -> tuple[int, list[Finding]]:
     harmless = int(stats.get("harmless", 0))
     undetected = int(stats.get("undetected", 0))
     total = sum(int(value) for value in stats.values()) or 1
-    score = min(100, round(((malicious + suspicious * 0.5) / total) * 100))
+    if malicious >= 5:
+        score = 90
+    elif malicious >= 1:
+        score = 60
+    elif suspicious >= 3:
+        score = 50
+    elif suspicious >= 1:
+        score = 35
+    else:
+        score = 0
     severity = "high" if malicious else ("medium" if suspicious else "info")
     return score, [
         Finding(
@@ -195,7 +200,7 @@ def recent_scans(limit: int = Query(default=20, ge=1, le=100)):
 @app.post("/api/scans", response_model=ScanResult, status_code=201)
 async def create_scan(payload: ScanRequest):
     target_type, normalized = classify_target(payload.target)
-    local_score, findings = await local_analysis(normalized, target_type)
+    local_score, findings = await local_analysis(payload.target, normalized, target_type)
     score = local_score
     provider = "ThreatScope structural and DNS analysis"
 

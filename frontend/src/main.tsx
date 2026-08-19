@@ -14,7 +14,7 @@ type Result = {
   findings: Finding[];
 };
 
-const API_URL = "http://localhost:8000";
+const API_URL = "http://127.0.0.1:8000";
 
 function App() {
   const [target, setTarget] = useState("");
@@ -25,7 +25,7 @@ function App() {
 
   async function loadHistory() {
     try {
-      const response = await fetch(`${API_URL}/api/scans?limit=10`);
+      const response = await fetch(`${API_URL}/api/scans?limit=10`, { signal: AbortSignal.timeout(8000) });
       if (response.ok) setHistory(await response.json());
     } catch {
       // The scan form surfaces connection errors; history can fail quietly.
@@ -45,6 +45,7 @@ function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ target }),
+        signal: AbortSignal.timeout(20000),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Scan failed");
@@ -52,7 +53,8 @@ function App() {
       setHistory((current) => [data, ...current.filter((item) => item.id !== data.id)].slice(0, 10));
       setTarget("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Scan failed");
+      const timedOut = err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
+      setError(timedOut ? "The backend did not respond. Confirm it is running at 127.0.0.1:8000." : err instanceof Error ? err.message : "Scan failed");
     } finally {
       setLoading(false);
     }

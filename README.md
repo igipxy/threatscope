@@ -8,6 +8,7 @@ ThreatScope is an original threat-intelligence dashboard for inspecting URLs, do
 - URL normalization with fragments and embedded credentials removed
 - Structural phishing checks for punycode, credential tricks, suspicious wording, encoding, ports, and deep subdomains
 - DNS resolution checks and blocking for local, private, and reserved networks
+- Independent RDAP registration intelligence: domain age, registrar, expiry, and nameservers
 - Risk score from 0–100
 - Low-risk, suspicious, or malicious verdicts
 - Explainable findings rather than a black-box result
@@ -25,6 +26,7 @@ ThreatScope is an original threat-intelligence dashboard for inspecting URLs, do
 - Frontend: React, TypeScript, Vite
 - Backend: Python, FastAPI
 - Database: SQLite
+- Registration data: public RDAP registries via the IANA bootstrap service
 - Intelligence provider: VirusTotal API v3 (optional)
 
 ## Run locally
@@ -60,7 +62,7 @@ VT_REQUESTS_PER_DAY=400
 CACHE_TTL_SECONDS=86400
 ```
 
-Do not submit private or confidential URLs. ThreatScope does not open the target page or execute its content.
+Do not submit private or confidential URLs. ThreatScope does not open the target page or execute its content. Domain registration checks query the public RDAP registry responsible for the domain's top-level domain.
 
 ### Frontend
 

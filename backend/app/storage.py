@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .models import Finding, ScanResult
@@ -24,11 +25,32 @@ def initialize_database(database_path: str) -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS provider_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                requested_at TEXT NOT NULL
+            )
+            """
+        )
         columns = {row[1] for row in connection.execute("PRAGMA table_info(scans)")}
         if "analysis_status" not in columns:
-            connection.execute(
-                "ALTER TABLE scans ADD COLUMN analysis_status TEXT NOT NULL DEFAULT 'completed'"
-            )
+            connection.execute("ALTER TABLE scans ADD COLUMN analysis_status TEXT NOT NULL DEFAULT 'completed'")
+
+
+def row_to_scan(row: sqlite3.Row) -> ScanResult:
+    return ScanResult(
+        id=row["id"],
+        target=row["target"],
+        target_type=row["target_type"],
+        score=row["score"],
+        verdict="low_risk" if row["verdict"] == "clean" else row["verdict"],
+        provider=row["provider"],
+        analysis_status="completed",
+        scanned_at=row["scanned_at"],
+        findings=json.loads(row["findings"]),
+    )
 
 
 def save_scan(database_path: str, result: ScanResult) -> None:
@@ -40,42 +62,28 @@ def save_scan(database_path: str, result: ScanResult) -> None:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                result.id,
-                result.target,
-                result.target_type,
-                result.score,
-                result.verdict,
-                result.provider,
-                result.analysis_status,
-                result.scanned_at.isoformat(),
+                result.id, result.target, result.target_type, result.score, result.verdict,
+                result.provider, result.analysis_status, result.scanned_at.isoformat(),
                 json.dumps([finding.model_dump() for finding in result.findings]),
             ),
         )
 
 
-def update_scan(
-    database_path: str,
-    scan_id: str,
-    score: int,
-    verdict: str,
-    findings: list[Finding],
-    provider: str,
-) -> None:
+def get_cached_scan(database_path: str, target: str, max_age_seconds: int) -> ScanResult | None:
     with sqlite3.connect(database_path) as connection:
-        connection.execute(
-            """
-            UPDATE scans
-            SET score = ?, verdict = ?, provider = ?, analysis_status = 'completed', findings = ?
-            WHERE id = ?
-            """,
-            (
-                score,
-                verdict,
-                provider,
-                json.dumps([finding.model_dump() for finding in findings]),
-                scan_id,
-            ),
-        )
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT * FROM scans WHERE target = ? ORDER BY scanned_at DESC LIMIT 1", (target,)
+        ).fetchone()
+    if not row:
+        return None
+    result = row_to_scan(row)
+    scanned_at = result.scanned_at
+    if scanned_at.tzinfo is None:
+        scanned_at = scanned_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) - scanned_at > timedelta(seconds=max_age_seconds):
+        return None
+    return result
 
 
 def list_scans(database_path: str, limit: int = 20) -> list[ScanResult]:
@@ -84,18 +92,34 @@ def list_scans(database_path: str, limit: int = 20) -> list[ScanResult]:
         rows = connection.execute(
             "SELECT * FROM scans ORDER BY scanned_at DESC LIMIT ?", (limit,)
         ).fetchall()
+    return [row_to_scan(row) for row in rows]
 
-    return [
-        ScanResult(
-            id=row["id"],
-            target=row["target"],
-            target_type=row["target_type"],
-            score=row["score"],
-            verdict="low_risk" if row["verdict"] == "clean" else row["verdict"],
-            provider=row["provider"],
-            analysis_status=row["analysis_status"] if "analysis_status" in row.keys() else "completed",
-            scanned_at=row["scanned_at"],
-            findings=json.loads(row["findings"]),
+
+def reserve_provider_request(
+    database_path: str,
+    provider: str,
+    max_per_minute: int,
+    max_per_day: int,
+) -> tuple[bool, str]:
+    now = datetime.now(timezone.utc)
+    minute_cutoff = (now - timedelta(minutes=1)).isoformat()
+    day_cutoff = (now - timedelta(days=1)).isoformat()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        minute_count = connection.execute(
+            "SELECT COUNT(*) FROM provider_requests WHERE provider = ? AND requested_at >= ?",
+            (provider, minute_cutoff),
+        ).fetchone()[0]
+        if minute_count >= max_per_minute:
+            return False, "per-minute budget reached"
+        day_count = connection.execute(
+            "SELECT COUNT(*) FROM provider_requests WHERE provider = ? AND requested_at >= ?",
+            (provider, day_cutoff),
+        ).fetchone()[0]
+        if day_count >= max_per_day:
+            return False, "daily budget reached"
+        connection.execute(
+            "INSERT INTO provider_requests (provider, requested_at) VALUES (?, ?)",
+            (provider, now.isoformat()),
         )
-        for row in rows
-    ]
+    return True, ""

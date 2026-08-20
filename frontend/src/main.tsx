@@ -10,7 +10,7 @@ type Result = {
   score: number;
   verdict: "low_risk" | "suspicious" | "malicious";
   provider: string;
-  analysis_status: "completed" | "queued";
+  cached: boolean;
   scanned_at: string;
   findings: Finding[];
 };
@@ -20,7 +20,7 @@ const verdictLabel = (verdict: Result["verdict"]) => verdict.replace("_", " ");
 
 function App() {
   const [target, setTarget] = useState("");
-  const [shareWithVirusTotal, setShareWithVirusTotal] = useState(false);
+  const [useVirusTotal, setUseVirusTotal] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [history, setHistory] = useState<Result[]>([]);
   const [error, setError] = useState("");
@@ -29,10 +29,7 @@ function App() {
   async function loadHistory() {
     try {
       const response = await fetch(`${API_URL}/api/scans?limit=10`, { signal: AbortSignal.timeout(8000) });
-      if (!response.ok) return;
-      const nextHistory: Result[] = await response.json();
-      setHistory(nextHistory);
-      setResult((current) => nextHistory.find((item) => item.id === current?.id) ?? current);
+      if (response.ok) setHistory(await response.json());
     } catch {
       // The scan form surfaces connection errors; history can fail quietly.
     }
@@ -40,8 +37,6 @@ function App() {
 
   useEffect(() => {
     loadHistory();
-    const interval = window.setInterval(loadHistory, 5000);
-    return () => window.clearInterval(interval);
   }, []);
 
   async function scan(event: FormEvent) {
@@ -52,8 +47,8 @@ function App() {
       const response = await fetch(`${API_URL}/api/scans`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target, share_with_virustotal: shareWithVirusTotal }),
-        signal: AbortSignal.timeout(35000),
+        body: JSON.stringify({ target, share_with_virustotal: useVirusTotal }),
+        signal: AbortSignal.timeout(20000),
       });
       const data: Result | { detail?: string } = await response.json();
       if (!response.ok) throw new Error(("detail" in data && data.detail) || "Scan failed");
@@ -81,11 +76,11 @@ function App() {
           <button disabled={loading}>{loading ? "ANALYZING…" : "SCAN TARGET"}</button>
         </form>
         <label className="sharing-control">
-          <input type="checkbox" checked={shareWithVirusTotal} onChange={(event) => setShareWithVirusTotal(event.target.checked)} />
-          <span>Share with VirusTotal for live engine analysis</span>
+          <input type="checkbox" checked={useVirusTotal} onChange={(event) => setUseVirusTotal(event.target.checked)} />
+          <span>Check an existing VirusTotal report</span>
         </label>
         {error && <p className="error">{error}</p>}
-        <p className="scan-note">Local structural and DNS checks always run. Enable sharing only for URLs you are allowed to send to VirusTotal.</p>
+        <p className="scan-note">Local analysis always runs. VirusTotal is optional, quota-limited, and never receives new URL submissions from ThreatScope.</p>
       </section>
 
       {result && (
@@ -94,7 +89,7 @@ function App() {
             <p className="eyebrow">LATEST ANALYSIS</p>
             <h2 title={result.target}>{result.target}</h2>
             <p>Provider: {result.provider}</p>
-            {result.analysis_status === "queued" && <p className="queued">Live analysis is queued; this result refreshes automatically.</p>}
+            {result.cached && <p className="cached">Recent cached result — no provider request used.</p>}
           </div>
           <div className={`score ${result.verdict}`}><strong>{result.score}</strong><span>/100<br />{verdictLabel(result.verdict)}</span></div>
           <div className="findings">
@@ -118,7 +113,7 @@ function App() {
             {history.map((item) => (
               <button className="history-row" key={item.id} onClick={() => setResult(item)}>
                 <span className={`history-score ${item.verdict}`}>{item.score}</span>
-                <span className="history-target"><strong>{item.target}</strong><small>{item.target_type} · {new Date(item.scanned_at).toLocaleString()} · {item.analysis_status}</small></span>
+                <span className="history-target"><strong>{item.target}</strong><small>{item.target_type} · {new Date(item.scanned_at).toLocaleString()}</small></span>
                 <span className={`verdict ${item.verdict}`}>{verdictLabel(item.verdict)}</span>
               </button>
             ))}

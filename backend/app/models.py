@@ -22,6 +22,7 @@ class ScanResult(BaseModel):
     score: int
     verdict: Literal["low_risk", "suspicious", "malicious"]
     provider: str
-    analysis_status: Literal["completed", "queued"] = "completed"
+    analysis_status: Literal["completed"] = "completed"
+    cached: bool = False
     scanned_at: datetime
     findings: list[Finding]

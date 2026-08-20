@@ -12,8 +12,9 @@ ThreatScope is an original threat-intelligence dashboard for inspecting URLs, do
 - Low-risk, suspicious, or malicious verdicts
 - Explainable findings rather than a black-box result
 - Local demo analysis when no API key is configured
-- VirusTotal API v3 report lookup and live submission with explicit user consent
-- Automatic refresh for queued VirusTotal analyses
+- Cache-first results with a 24-hour default lifetime
+- Optional VirusTotal report lookup, protected by local request budgets
+- No automatic VirusTotal URL submissions or polling
 - Persistent SQLite scan history
 - Responsive React dashboard
 - FastAPI backend with interactive API documentation
@@ -49,7 +50,17 @@ VIRUSTOTAL_API_KEY=your_key_here
 
 Never commit the `.env` file.
 
-When a VirusTotal key is enabled, the user must explicitly select the sharing option before ThreatScope sends a URL to VirusTotal for live analysis. Do not submit private or confidential URLs. ThreatScope does not open the target page or execute its content.
+When a VirusTotal key is enabled, the user must explicitly select the optional lookup. ThreatScope checks only an existing VirusTotal report and never submits a new URL or polls for a new analysis. Results are cached locally for 24 hours by default to conserve quota.
+
+The default local limits are 3 VirusTotal requests per minute and 400 per day. Adjust them in `.env` only if your VirusTotal plan permits it:
+
+```env
+VT_REQUESTS_PER_MINUTE=3
+VT_REQUESTS_PER_DAY=400
+CACHE_TTL_SECONDS=86400
+```
+
+Do not submit private or confidential URLs. ThreatScope does not open the target page or execute its content.
 
 ### Frontend
 

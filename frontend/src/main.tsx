@@ -8,16 +8,19 @@ type Result = {
   target: string;
   target_type: string;
   score: number;
-  verdict: "clean" | "suspicious" | "malicious";
+  verdict: "low_risk" | "suspicious" | "malicious";
   provider: string;
+  analysis_status: "completed" | "queued";
   scanned_at: string;
   findings: Finding[];
 };
 
 const API_URL = "http://127.0.0.1:8000";
+const verdictLabel = (verdict: Result["verdict"]) => verdict.replace("_", " ");
 
 function App() {
   const [target, setTarget] = useState("");
+  const [shareWithVirusTotal, setShareWithVirusTotal] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [history, setHistory] = useState<Result[]>([]);
   const [error, setError] = useState("");
@@ -26,7 +29,10 @@ function App() {
   async function loadHistory() {
     try {
       const response = await fetch(`${API_URL}/api/scans?limit=10`, { signal: AbortSignal.timeout(8000) });
-      if (response.ok) setHistory(await response.json());
+      if (!response.ok) return;
+      const nextHistory: Result[] = await response.json();
+      setHistory(nextHistory);
+      setResult((current) => nextHistory.find((item) => item.id === current?.id) ?? current);
     } catch {
       // The scan form surfaces connection errors; history can fail quietly.
     }
@@ -34,6 +40,8 @@ function App() {
 
   useEffect(() => {
     loadHistory();
+    const interval = window.setInterval(loadHistory, 5000);
+    return () => window.clearInterval(interval);
   }, []);
 
   async function scan(event: FormEvent) {
@@ -44,13 +52,14 @@ function App() {
       const response = await fetch(`${API_URL}/api/scans`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target }),
+        body: JSON.stringify({ target, share_with_virustotal: shareWithVirusTotal }),
         signal: AbortSignal.timeout(35000),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "Scan failed");
-      setResult(data);
-      setHistory((current) => [data, ...current.filter((item) => item.id !== data.id)].slice(0, 10));
+      const data: Result | { detail?: string } = await response.json();
+      if (!response.ok) throw new Error(("detail" in data && data.detail) || "Scan failed");
+      const scanResult = data as Result;
+      setResult(scanResult);
+      setHistory((current) => [scanResult, ...current.filter((item) => item.id !== scanResult.id)].slice(0, 10));
       setTarget("");
     } catch (err) {
       const timedOut = err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
@@ -71,18 +80,23 @@ function App() {
           <input required value={target} onChange={(e) => setTarget(e.target.value)} placeholder="https://example.com/path" aria-label="Scan target" />
           <button disabled={loading}>{loading ? "ANALYZING…" : "SCAN TARGET"}</button>
         </form>
+        <label className="sharing-control">
+          <input type="checkbox" checked={shareWithVirusTotal} onChange={(event) => setShareWithVirusTotal(event.target.checked)} />
+          <span>Share with VirusTotal for live engine analysis</span>
+        </label>
         {error && <p className="error">{error}</p>}
-        <p className="scan-note">Full URLs receive structural and DNS checks. With a VirusTotal key, unknown URLs are submitted for live engine analysis.</p>
+        <p className="scan-note">Local structural and DNS checks always run. Enable sharing only for URLs you are allowed to send to VirusTotal.</p>
       </section>
 
       {result && (
         <section className="result">
           <div>
             <p className="eyebrow">LATEST ANALYSIS</p>
-            <h2>{result.target}</h2>
+            <h2 title={result.target}>{result.target}</h2>
             <p>Provider: {result.provider}</p>
+            {result.analysis_status === "queued" && <p className="queued">Live analysis is queued; this result refreshes automatically.</p>}
           </div>
-          <div className={`score ${result.verdict}`}><strong>{result.score}</strong><span>/100<br />{result.verdict}</span></div>
+          <div className={`score ${result.verdict}`}><strong>{result.score}</strong><span>/100<br />{verdictLabel(result.verdict)}</span></div>
           <div className="findings">
             {result.findings.map((finding) => (
               <article key={finding.label}>
@@ -104,8 +118,8 @@ function App() {
             {history.map((item) => (
               <button className="history-row" key={item.id} onClick={() => setResult(item)}>
                 <span className={`history-score ${item.verdict}`}>{item.score}</span>
-                <span className="history-target"><strong>{item.target}</strong><small>{item.target_type} · {new Date(item.scanned_at).toLocaleString()}</small></span>
-                <span className={`verdict ${item.verdict}`}>{item.verdict}</span>
+                <span className="history-target"><strong>{item.target}</strong><small>{item.target_type} · {new Date(item.scanned_at).toLocaleString()} · {item.analysis_status}</small></span>
+                <span className={`verdict ${item.verdict}`}>{verdictLabel(item.verdict)}</span>
               </button>
             ))}
           </div>

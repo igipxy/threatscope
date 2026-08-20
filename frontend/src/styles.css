@@ -20,12 +20,15 @@ form button { padding: 0 28px; border: 0; border-radius: 8px; background: #70f5b
 button:disabled { opacity: .6; }
 .error { color: #ff8585; }
 .scan-note { margin-top: 12px; color: #71827b; font-size: 13px; line-height: 1.5; }
+.sharing-control { display: flex; gap: 9px; align-items: center; margin-top: 14px; color: #c2d2cb; font-size: 14px; cursor: pointer; }
+.sharing-control input { width: 16px; height: 16px; accent-color: #70f5b4; }
+.queued { color: #ffd166 !important; font-size: 14px; }
 .result { display: grid; grid-template-columns: 1fr auto; gap: 32px; padding: 34px; border: 1px solid #315247; border-radius: 16px; background: rgba(12, 25, 21, .8); }
-.result h2 { margin: 8px 0; word-break: break-all; }
+.result h2 { margin: 8px 0; overflow-wrap: anywhere; font-size: clamp(21px, 3vw, 32px); }
 .result p { color: #aebdb7; }
 .score { display: flex; align-items: center; gap: 12px; text-transform: uppercase; }
 .score strong { font-size: 58px; }
-.clean { color: #70f5b4; } .suspicious { color: #ffd166; } .malicious { color: #ff7070; }
+.low_risk { color: #70f5b4; } .suspicious { color: #ffd166; } .malicious { color: #ff7070; }
 .findings { grid-column: 1 / -1; display: grid; gap: 10px; }
 article { display: flex; gap: 18px; align-items: center; padding: 18px; background: #0a1512; border-radius: 8px; }
 article h3, article p { margin: 2px 0; }

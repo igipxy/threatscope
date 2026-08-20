@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 class ScanRequest(BaseModel):
     target: str = Field(min_length=3, max_length=2048)
+    share_with_virustotal: bool = False
 
 
 class Finding(BaseModel):
@@ -19,7 +20,8 @@ class ScanResult(BaseModel):
     target: str
     target_type: Literal["url", "domain", "ip"]
     score: int
-    verdict: Literal["clean", "suspicious", "malicious"]
+    verdict: Literal["low_risk", "suspicious", "malicious"]
     provider: str
+    analysis_status: Literal["completed", "queued"] = "completed"
     scanned_at: datetime
     findings: list[Finding]

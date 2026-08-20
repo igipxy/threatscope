@@ -80,7 +80,7 @@ function App() {
           <span>Check an existing VirusTotal report</span>
         </label>
         {error && <p className="error">{error}</p>}
-        <p className="scan-note">Local analysis always runs. VirusTotal is optional, quota-limited, and never receives new URL submissions from ThreatScope.</p>
+        <p className="scan-note">Local analysis includes structural, DNS, and public RDAP registration checks. VirusTotal is optional, quota-limited, and never receives new URL submissions from ThreatScope.</p>
       </section>
 
       {result && (

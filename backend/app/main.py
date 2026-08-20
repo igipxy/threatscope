@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .domain_intelligence import domain_intelligence
 from .models import Finding, ScanRequest, ScanResult
 from .storage import get_cached_scan, initialize_database, list_scans, reserve_provider_request, save_scan
 from .url_analysis import analyze_url_structure, check_dns, normalize_url
@@ -82,12 +83,18 @@ def local_scan(target: str, target_type: str) -> tuple[int, list[Finding]]:
 
 
 async def local_analysis(original: str, target: str, target_type: str) -> tuple[int, list[Finding]]:
-    if target_type != "url":
+    if target_type == "url":
+        score, findings = analyze_url_structure(original, target)
+        hostname = urlparse(target).hostname or ""
+        findings.append(await check_dns(hostname))
+    elif target_type == "domain":
+        score, findings = local_scan(target, target_type)
+        hostname = target
+    else:
         return local_scan(target, target_type)
-    score, findings = analyze_url_structure(original, target)
-    findings.append(await check_dns(urlparse(target).hostname or ""))
-    return score, findings
 
+    domain_score, domain_findings = await domain_intelligence(hostname)
+    return min(100, score + domain_score), [*findings, *domain_findings]
 
 def provider_result(stats: dict) -> tuple[int, list[Finding]]:
     malicious = int(stats.get("malicious", 0))

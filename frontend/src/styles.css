@@ -20,8 +20,14 @@ form button { padding: 0 28px; border: 0; border-radius: 8px; background: #70f5b
 button:disabled { opacity: .6; }
 .error { color: #ff8585; }
 .scan-note { margin-top: 12px; color: #71827b; font-size: 13px; line-height: 1.5; }
-.sharing-control { display: inline-flex; gap: 9px; align-items: center; margin-top: 14px; color: #c2d2cb; font-size: 14px; cursor: pointer; }
-.sharing-control input { flex: 0 0 16px; width: 16px; height: 16px; margin: 0; padding: 0; accent-color: #70f5b4; }
+.lookup-toggle { display: inline-flex; gap: 11px; align-items: center; max-width: 100%; margin-top: 14px; padding: 10px 13px; color: #c2d2cb; text-align: left; background: #0c1915; border: 1px solid #315247; border-radius: 8px; cursor: pointer; }
+.lookup-toggle:hover { border-color: #70f5b4; }
+.lookup-toggle.active { border-color: #70f5b4; background: #10231d; }
+.toggle-indicator { display: grid; flex: 0 0 18px; width: 18px; height: 18px; place-items: center; color: #06110d; background: transparent; border: 1px solid #71827b; border-radius: 4px; font-size: 13px; font-weight: 900; }
+.lookup-toggle.active .toggle-indicator { background: #70f5b4; border-color: #70f5b4; }
+.lookup-toggle strong, .lookup-toggle small { display: block; }
+.lookup-toggle strong { color: #e8edf2; font-size: 13px; }
+.lookup-toggle small { margin-top: 2px; color: #71827b; font-size: 12px; }
 .cached { color: #70f5b4 !important; font-size: 14px; }
 .result { display: grid; grid-template-columns: 1fr auto; gap: 32px; padding: 34px; border: 1px solid #315247; border-radius: 16px; background: rgba(12, 25, 21, .8); }
 .result h2 { margin: 8px 0; overflow-wrap: anywhere; font-size: clamp(21px, 3vw, 32px); }

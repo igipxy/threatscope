@@ -75,10 +75,15 @@ function App() {
           <input required value={target} onChange={(e) => setTarget(e.target.value)} placeholder="https://example.com/path" aria-label="Scan target" />
           <button disabled={loading}>{loading ? "ANALYZING…" : "SCAN TARGET"}</button>
         </form>
-        <label className="sharing-control">
-          <input type="checkbox" checked={useVirusTotal} onChange={(event) => setUseVirusTotal(event.target.checked)} />
-          <span>Check an existing VirusTotal report</span>
-        </label>
+        <button
+          type="button"
+          className={`lookup-toggle ${useVirusTotal ? "active" : ""}`}
+          aria-pressed={useVirusTotal}
+          onClick={() => setUseVirusTotal((enabled) => !enabled)}
+        >
+          <span className="toggle-indicator" aria-hidden="true">{useVirusTotal ? "✓" : ""}</span>
+          <span><strong>Check an existing VirusTotal report</strong><small>Optional, quota-limited lookup. No new URL is submitted.</small></span>
+        </button>
         {error && <p className="error">{error}</p>}
         <p className="scan-note">Local analysis includes structural, DNS, and public RDAP registration checks. VirusTotal is optional, quota-limited, and never receives new URL submissions from ThreatScope.</p>
       </section>

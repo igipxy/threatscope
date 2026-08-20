@@ -22,7 +22,7 @@ button:disabled { opacity: .6; }
 .scan-note { margin-top: 12px; color: #71827b; font-size: 13px; line-height: 1.5; }
 .sharing-control { display: flex; gap: 9px; align-items: center; margin-top: 14px; color: #c2d2cb; font-size: 14px; cursor: pointer; }
 .sharing-control input { width: 16px; height: 16px; accent-color: #70f5b4; }
-.queued { color: #ffd166 !important; font-size: 14px; }
+.cached { color: #70f5b4 !important; font-size: 14px; }
 .result { display: grid; grid-template-columns: 1fr auto; gap: 32px; padding: 34px; border: 1px solid #315247; border-radius: 16px; background: rgba(12, 25, 21, .8); }
 .result h2 { margin: 8px 0; overflow-wrap: anywhere; font-size: clamp(21px, 3vw, 32px); }
 .result p { color: #aebdb7; }

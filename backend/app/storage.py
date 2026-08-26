@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .models import Finding, ScanResult
+from .models import ScanResult
 
 
 def initialize_database(database_path: str) -> None:
@@ -19,6 +19,7 @@ def initialize_database(database_path: str) -> None:
                 score INTEGER NOT NULL,
                 verdict TEXT NOT NULL,
                 provider TEXT NOT NULL,
+                analysis_mode TEXT NOT NULL DEFAULT 'local',
                 analysis_status TEXT NOT NULL DEFAULT 'completed',
                 scanned_at TEXT NOT NULL,
                 findings TEXT NOT NULL
@@ -37,6 +38,15 @@ def initialize_database(database_path: str) -> None:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(scans)")}
         if "analysis_status" not in columns:
             connection.execute("ALTER TABLE scans ADD COLUMN analysis_status TEXT NOT NULL DEFAULT 'completed'")
+        if "analysis_mode" not in columns:
+            connection.execute("ALTER TABLE scans ADD COLUMN analysis_mode TEXT NOT NULL DEFAULT 'local'")
+            connection.execute(
+                """
+                UPDATE scans
+                SET analysis_mode = 'virustotal'
+                WHERE provider LIKE '%VirusTotal%'
+                """
+            )
 
 
 def row_to_scan(row: sqlite3.Row) -> ScanResult:
@@ -53,27 +63,38 @@ def row_to_scan(row: sqlite3.Row) -> ScanResult:
     )
 
 
-def save_scan(database_path: str, result: ScanResult) -> None:
+def save_scan(database_path: str, result: ScanResult, analysis_mode: str = "local") -> None:
     with sqlite3.connect(database_path) as connection:
         connection.execute(
             """
             INSERT INTO scans
-            (id, target, target_type, score, verdict, provider, analysis_status, scanned_at, findings)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, target, target_type, score, verdict, provider, analysis_mode, analysis_status, scanned_at, findings)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 result.id, result.target, result.target_type, result.score, result.verdict,
-                result.provider, result.analysis_status, result.scanned_at.isoformat(),
+                result.provider, analysis_mode, result.analysis_status, result.scanned_at.isoformat(),
                 json.dumps([finding.model_dump() for finding in result.findings]),
             ),
         )
 
 
-def get_cached_scan(database_path: str, target: str, max_age_seconds: int) -> ScanResult | None:
+def get_cached_scan(
+    database_path: str,
+    target: str,
+    max_age_seconds: int,
+    analysis_mode: str = "local",
+) -> ScanResult | None:
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
         row = connection.execute(
-            "SELECT * FROM scans WHERE target = ? ORDER BY scanned_at DESC LIMIT 1", (target,)
+            """
+            SELECT * FROM scans
+            WHERE target = ? AND analysis_mode = ?
+            ORDER BY scanned_at DESC
+            LIMIT 1
+            """,
+            (target, analysis_mode),
         ).fetchone()
     if not row:
         return None

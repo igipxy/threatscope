@@ -1,3 +1,4 @@
+import httpx
 from fastapi.testclient import TestClient
 
 from app import main as main_module
@@ -80,6 +81,33 @@ def test_rejects_direct_non_public_ip(tmp_path):
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Local, private, and reserved IP addresses cannot be scanned."
+
+
+def test_provider_timeout_keeps_local_result(tmp_path, monkeypatch):
+    settings.database_path = str(tmp_path / "test.db")
+    settings.virustotal_api_key = "test-key"
+
+    class FailingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def get(self, *args, **kwargs):
+            raise httpx.ReadTimeout("provider timed out")
+
+    monkeypatch.setattr(main_module.httpx, "AsyncClient", lambda *args, **kwargs: FailingClient())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/scans",
+            json={"target": "8.8.4.4", "share_with_virustotal": True},
+        )
+
+    assert response.status_code == 201
+    assert response.json()["provider"] == "ThreatScope + VirusTotal report"
+    assert any(item["label"] == "VirusTotal unavailable" for item in response.json()["findings"])
 
 
 def test_provider_budget_stops_excess_requests(tmp_path):

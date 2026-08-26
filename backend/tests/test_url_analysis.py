@@ -10,6 +10,14 @@ def test_normalization_removes_fragment_and_credentials():
     assert normalized == "https://example.com/path"
 
 
+def test_malformed_port_is_rejected():
+    with pytest.raises(HTTPException) as error:
+        normalize_url("https://example.com:not-a-port/path")
+
+    assert error.value.status_code == 422
+    assert error.value.detail == "The URL must include a valid port."
+
+
 def test_embedded_credentials_raise_url_risk():
     normalized = normalize_url("https://user@example.com/login")
     score, findings = analyze_url_structure("https://user@example.com/login", normalized)

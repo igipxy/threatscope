@@ -15,7 +15,7 @@ type Result = {
   findings: Finding[];
 };
 
-const API_URL = (import.meta.env.VITE_API_URL ?? "").replace(/\\\/$/, "");
+const API_URL = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 const verdictLabel = (verdict: Result["verdict"]) => verdict.replace("_", " ");
 
 function App() {

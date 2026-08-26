@@ -38,5 +38,11 @@ jobs:
         with:
           node-version: "22"
       - run: npm install
+      - name: Emit lockfile for bootstrap
+        run: |
+          echo LOCKFILE_BEGIN
+          base64 -w 0 package-lock.json
+          echo
+          echo LOCKFILE_END
       - run: npm run typecheck
       - run: npm run build

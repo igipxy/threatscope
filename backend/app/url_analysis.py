@@ -32,11 +32,15 @@ def normalize_url(value: str) -> str:
         raise HTTPException(status_code=422, detail="Only HTTP and HTTPS URLs can be scanned.")
     if not parsed.hostname:
         raise HTTPException(status_code=422, detail="The URL must include a valid hostname.")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="The URL must include a valid port.") from error
     if parsed.username or parsed.password:
         # Keep parsing credentials as a signal, but never echo them into a normalized result.
         hostname = parsed.hostname
-        if parsed.port:
-            hostname = f"{hostname}:{parsed.port}"
+        if port:
+            hostname = f"{hostname}:{port}"
         parsed = parsed._replace(netloc=hostname)
     return urlunparse(parsed._replace(scheme=parsed.scheme.lower(), fragment=""))
 

@@ -15,7 +15,7 @@ type Result = {
   findings: Finding[];
 };
 
-const API_URL = "http://127.0.0.1:8000";
+const API_URL = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 const verdictLabel = (verdict: Result["verdict"]) => verdict.replace("_", " ");
 
 function App() {
@@ -58,7 +58,7 @@ function App() {
       setTarget("");
     } catch (err) {
       const timedOut = err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
-      setError(timedOut ? "The backend did not respond. Confirm it is running at 127.0.0.1:8000." : err instanceof Error ? err.message : "Scan failed");
+      setError(timedOut ? "The API did not respond. Confirm the backend is running and VITE_API_URL is configured when needed." : err instanceof Error ? err.message : "Scan failed");
     } finally {
       setLoading(false);
     }

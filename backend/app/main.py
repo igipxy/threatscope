@@ -49,8 +49,13 @@ app.add_middleware(
 def classify_target(value: str) -> tuple[str, str]:
     value = value.strip()
     try:
-        ipaddress.ip_address(value)
-        return "ip", value
+        address = ipaddress.ip_address(value)
+        if not address.is_global:
+            raise HTTPException(
+                status_code=422,
+                detail="Local, private, and reserved IP addresses cannot be scanned.",
+            )
+        return "ip", address.compressed
     except ValueError:
         pass
     if "://" in value:
@@ -96,6 +101,7 @@ async def local_analysis(original: str, target: str, target_type: str) -> tuple[
     domain_score, domain_findings = await domain_intelligence(hostname)
     return min(100, score + domain_score), [*findings, *domain_findings]
 
+
 def provider_result(stats: dict) -> tuple[int, list[Finding]]:
     malicious = int(stats.get("malicious", 0))
     suspicious = int(stats.get("suspicious", 0))
@@ -114,11 +120,18 @@ def provider_result(stats: dict) -> tuple[int, list[Finding]]:
 async def virustotal_report(target: str, target_type: str) -> tuple[int, list[Finding]]:
     endpoint_type = "urls" if target_type == "url" else ("domains" if target_type == "domain" else "ip_addresses")
     identifier = base64.urlsafe_b64encode(target.encode()).decode().strip("=") if target_type == "url" else target
-    async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
-        response = await client.get(
-            f"https://www.virustotal.com/api/v3/{endpoint_type}/{identifier}",
-            headers={"x-apikey": settings.virustotal_api_key},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
+            response = await client.get(
+                f"https://www.virustotal.com/api/v3/{endpoint_type}/{identifier}",
+                headers={"x-apikey": settings.virustotal_api_key},
+            )
+    except httpx.HTTPError:
+        return 0, [Finding(
+            label="VirusTotal unavailable",
+            severity="info",
+            detail="The external provider could not be reached. Local analysis is still complete.",
+        )]
     if response.status_code == 200:
         stats = response.json().get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
         return provider_result(stats)
@@ -151,15 +164,26 @@ def recent_scans(limit: int = Query(default=20, ge=1, le=100)):
 @app.post("/api/scans", response_model=ScanResult, status_code=201)
 async def create_scan(payload: ScanRequest):
     target_type, normalized = classify_target(payload.target)
-    cached = get_cached_scan(settings.database_path, normalized, settings.cache_ttl_seconds)
+    requested_mode = (
+        "virustotal"
+        if settings.virustotal_api_key and payload.share_with_virustotal
+        else "local"
+    )
+    cached = get_cached_scan(
+        settings.database_path,
+        normalized,
+        settings.cache_ttl_seconds,
+        requested_mode,
+    )
     if cached:
         cache_finding = Finding(label="Cached result", severity="info", detail="This result was reused from a recent scan to conserve provider quota.")
         return cached.model_copy(update={"cached": True, "findings": [*cached.findings, cache_finding]})
 
     score, findings = await local_analysis(payload.target, normalized, target_type)
     provider = "ThreatScope local analysis"
+    completed_mode = "local"
 
-    if settings.virustotal_api_key and payload.share_with_virustotal:
+    if requested_mode == "virustotal":
         permitted, reason = reserve_provider_request(
             settings.database_path, "virustotal", settings.vt_requests_per_minute, settings.vt_requests_per_day
         )
@@ -168,6 +192,7 @@ async def create_scan(payload: ScanRequest):
             score = max(score, provider_score)
             findings.extend(provider_findings)
             provider = "ThreatScope + VirusTotal report"
+            completed_mode = "virustotal"
         else:
             findings.append(Finding(label="VirusTotal budget protected", severity="info", detail=f"Live lookup skipped: {reason}. Local analysis is still complete."))
     elif settings.virustotal_api_key:
@@ -184,5 +209,5 @@ async def create_scan(payload: ScanRequest):
         scanned_at=scanned_at,
         findings=findings,
     )
-    save_scan(settings.database_path, result)
+    save_scan(settings.database_path, result, completed_mode)
     return result

@@ -1,98 +1,147 @@
 # 🛡️ ThreatScope
 
-ThreatScope is an original threat-intelligence dashboard for inspecting URLs, domains, and IP addresses. It turns security signals into a simple risk score, verdict, and explainable findings.
+ThreatScope v0.2 is an explainable threat-intelligence dashboard for inspecting URLs, domains, and IP addresses without opening the target page. It combines local structural checks, DNS validation, public RDAP registration data, and an optional lookup of existing VirusTotal reports.
 
-## Current MVP
+> ThreatScope reports indicators, not certainty. A low score does not prove that a target is safe, and a high score should be reviewed in context. Scan only targets you are authorized to inspect.
 
-- URL, domain, and IP input validation
-- URL normalization with fragments and embedded credentials removed
-- Structural phishing checks for punycode, credential tricks, suspicious wording, encoding, ports, and deep subdomains
-- DNS resolution checks and blocking for local, private, and reserved networks
-- Independent RDAP registration intelligence: domain age, registrar, expiry, and nameservers
-- Risk score from 0–100
-- Low-risk, suspicious, or malicious verdicts
-- Explainable findings rather than a black-box result
-- Local demo analysis when no API key is configured
-- Cache-first results with a 24-hour default lifetime
-- Optional VirusTotal report lookup, protected by local request budgets
-- No automatic VirusTotal URL submissions or polling
+## Highlights
+
+- URL, domain, and public IP validation and normalization
+- Blocking for localhost, private, reserved, and other non-public network targets
+- Explainable checks for HTTP, embedded credentials, punycode, suspicious wording, encoding, ports, long URLs, and deep subdomains
+- DNS resolution and independent RDAP registration intelligence
+- Risk scores from 0–100 with low-risk, suspicious, and malicious verdicts
+- Local-first operation with no provider key required
+- Optional, explicit lookup of an existing VirusTotal report
+- No automatic VirusTotal submissions or polling
+- Provider-aware caching with a 24-hour default lifetime
+- Local VirusTotal request budgets
 - Persistent SQLite scan history
 - Responsive React dashboard
-- FastAPI backend with interactive API documentation
-- Backend API tests
+- Backend and frontend regression tests enforced by GitHub Actions
 
-## Tech stack
+## Architecture
 
-- Frontend: React, TypeScript, Vite
-- Backend: Python, FastAPI
-- Database: SQLite
-- Registration data: public RDAP registries via the IANA bootstrap service
-- Intelligence provider: VirusTotal API v3 (optional)
+~~~text
+React + Vite
+    │  GET/POST /api/scans
+    ▼
+FastAPI
+    ├── local URL and target analysis
+    ├── DNS safety checks
+    ├── public RDAP registration lookup
+    ├── optional existing VirusTotal report lookup
+    └── SQLite history, cache, and provider budgets
+~~~
+
+ThreatScope never fetches or executes the inspected web page. Domain registration checks query the public RDAP registry responsible for the target's top-level domain. VirusTotal receives a target only when a key is configured and the user explicitly enables the optional lookup.
+
+## Requirements
+
+- Python 3.12
+- Node.js 22
+- npm
+- Git
 
 ## Run locally
 
-### Backend on Windows
+Clone the repository and start the backend:
 
-```bat
-cd backend
-py -m venv venv
-venv\Scripts\activate
+~~~bash
+git clone https://github.com/igipxy/threatscope.git
+cd threatscope/backend
+python -m venv .venv
+~~~
+
+Activate the environment:
+
+~~~powershell
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+~~~
+
+~~~bash
+# macOS or Linux
+source .venv/bin/activate
+~~~
+
+Then install and run the API:
+
+~~~bash
 python -m pip install -r requirements.txt
-copy .env.example .env
+cp .env.example .env
 python -m uvicorn app.main:app --reload
-```
+~~~
 
-The API runs at `http://localhost:8000`. API documentation is available at `http://localhost:8000/docs`.
+On Windows Command Prompt, use **copy .env.example .env** instead of **cp**.
 
-To enable VirusTotal, put your key in `backend/.env`:
+The API runs at **http://localhost:8000**; interactive documentation is at **http://localhost:8000/docs**.
 
-```env
+In a second terminal, start the frontend:
+
+~~~bash
+cd threatscope/frontend
+npm ci
+npm run dev
+~~~
+
+Open **http://localhost:5173**.
+
+## Optional VirusTotal lookup
+
+Put a current key in **backend/.env**:
+
+~~~env
 VIRUSTOTAL_API_KEY=your_key_here
-```
-
-Never commit the `.env` file.
-
-When a VirusTotal key is enabled, the user must explicitly select the optional lookup. ThreatScope checks only an existing VirusTotal report and never submits a new URL or polls for a new analysis. Results are cached locally for 24 hours by default to conserve quota.
-
-The default local limits are 3 VirusTotal requests per minute and 400 per day. Adjust them in `.env` only if your VirusTotal plan permits it:
-
-```env
 VT_REQUESTS_PER_MINUTE=3
 VT_REQUESTS_PER_DAY=400
 CACHE_TTL_SECONDS=86400
-```
+~~~
 
-Do not submit private or confidential URLs. ThreatScope does not open the target page or execute its content. Domain registration checks query the public RDAP registry responsible for the domain's top-level domain.
+Never commit **.env**. If a key is exposed, revoke it in the provider account immediately and replace it. Unknown, failed, unavailable, or rate-limited VirusTotal results are recorded in history but are not cached as successful provider reports.
 
-### Frontend
+## Tests
 
-In a second terminal:
+Backend:
 
-```bat
-cd frontend
-npm install
-npm run dev
-```
-
-Open `http://localhost:5173`.
-
-### Tests
-
-From the `backend` folder with the virtual environment active:
-
-```bat
+~~~bash
+cd backend
 python -m pytest
-```
+~~~
 
-## Updating an existing local checkout
+Frontend:
 
-```bat
-cd C:\Users\Administrator\threatscope
-git pull
-```
+~~~bash
+cd frontend
+npm ci
+npm test
+npm run typecheck
+npm run build
+~~~
 
-Restart the backend after pulling. Vite normally refreshes the frontend automatically.
+The backend suite includes versioned scoring fixtures, storage migrations, provider quota behavior, and cache correctness. The frontend suite covers consent, request payloads, loading and error states, cached results, findings, verdicts, and scan history.
 
-## Important note
+## API compatibility
 
-ThreatScope presents security indicators and cannot guarantee that a target is safe. Only scan targets you are authorized to inspect.
+The v0.2 release keeps these interfaces stable:
+
+- **GET /health**
+- **GET /api/scans**
+- **POST /api/scans**
+- **ScanRequest**
+- **ScanResult**
+
+API documentation is generated by FastAPI at **/docs**.
+
+## Security and privacy
+
+- Do not scan private, confidential, or unauthorized targets.
+- ThreatScope does not load or execute target-page content.
+- Local, private, reserved, and loopback addresses are rejected.
+- VirusTotal lookup is optional, explicit, quota-limited, and checks only existing reports.
+- Secrets belong only in ignored local environment files.
+- Use reserved **.example** domains for safe regression testing.
+
+## License
+
+ThreatScope is available under the [MIT License](LICENSE).

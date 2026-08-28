@@ -145,3 +145,57 @@ def test_rejects_unsupported_url_scheme():
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Only HTTP and HTTPS URLs can be scanned."
+
+
+@pytest.mark.parametrize(
+    ("status", "finding_label"),
+    [
+        ("not_found", "VirusTotal report unavailable"),
+        ("rate_limited", "VirusTotal quota reached"),
+    ],
+)
+def test_unsuccessful_provider_outcomes_are_persisted_but_not_cached(
+    monkeypatch,
+    status,
+    finding_label,
+):
+    monkeypatch.setattr(settings, "virustotal_api_key", "test-key")
+    provider_calls = 0
+
+    async def fake_virustotal_report(target, target_type):
+        nonlocal provider_calls
+        provider_calls += 1
+        return ProviderOutcome(
+            status=status,
+            score=0,
+            findings=[
+                Finding(
+                    label=finding_label,
+                    severity="info",
+                    detail="Provider result unavailable for this test.",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(main_module, "virustotal_report", fake_virustotal_report)
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/api/scans",
+            json={"target": "1.1.1.1", "share_with_virustotal": True},
+        )
+        retry = client.post(
+            "/api/scans",
+            json={"target": "1.1.1.1", "share_with_virustotal": True},
+        )
+        history = client.get("/api/scans")
+
+    assert first.status_code == 201
+    assert retry.status_code == 201
+    assert first.json()["cached"] is False
+    assert retry.json()["cached"] is False
+    assert first.json()["id"] != retry.json()["id"]
+    assert provider_calls == 2
+    assert history.status_code == 200
+    assert len(history.json()) == 2
+    assert all(item["provider"] == "ThreatScope local analysis" for item in history.json())

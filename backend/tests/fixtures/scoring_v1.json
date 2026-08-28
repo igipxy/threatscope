@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "safe_https",
+      "target": "https://example.com/",
+      "minimum_score": 0,
+      "expected_labels": ["Structural checks passed"]
+    },
+    {
+      "name": "unencrypted_http",
+      "target": "http://example.com/",
+      "minimum_score": 20,
+      "expected_labels": ["Unencrypted connection"]
+    },
+    {
+      "name": "embedded_credentials",
+      "target": "https://user:secret@example.com/path",
+      "minimum_score": 30,
+      "expected_labels": ["Embedded credentials"]
+    },
+    {
+      "name": "punycode_hostname",
+      "target": "https://xn--pple-43d.example/",
+      "minimum_score": 30,
+      "expected_labels": ["Punycode hostname"]
+    },
+    {
+      "name": "suspicious_terms",
+      "target": "https://secure-login.example.com/account/verify",
+      "minimum_score": 30,
+      "expected_labels": ["Sensitive-action wording"]
+    },
+    {
+      "name": "heavy_encoding",
+      "target": "https://example.com/%61%62%63%64",
+      "minimum_score": 10,
+      "expected_labels": ["Heavy URL encoding"]
+    },
+    {
+      "name": "deep_subdomains",
+      "target": "https://a.b.c.d.example.com/",
+      "minimum_score": 15,
+      "expected_labels": ["Deep subdomain chain"]
+    },
+    {
+      "name": "unusual_port",
+      "target": "https://example.com:8443/",
+      "minimum_score": 10,
+      "expected_labels": ["Non-standard port"]
+    },
+    {
+      "name": "private_network",
+      "target": "http://127.0.0.1/admin",
+      "blocked": true
+    }
+  ]
+}

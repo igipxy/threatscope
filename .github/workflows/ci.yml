@@ -27,7 +27,7 @@ jobs:
       - run: python -m pytest
 
   frontend:
-    name: Frontend type-check and build
+    name: Frontend tests, type-check and build
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -38,5 +38,6 @@ jobs:
         with:
           node-version: "22"
       - run: npm ci
+      - run: npm test
       - run: npm run typecheck
       - run: npm run build

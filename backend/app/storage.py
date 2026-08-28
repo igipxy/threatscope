@@ -20,6 +20,7 @@ def initialize_database(database_path: str) -> None:
                 verdict TEXT NOT NULL,
                 provider TEXT NOT NULL,
                 analysis_mode TEXT NOT NULL DEFAULT 'local',
+                cacheable INTEGER NOT NULL DEFAULT 1,
                 analysis_status TEXT NOT NULL DEFAULT 'completed',
                 scanned_at TEXT NOT NULL,
                 findings TEXT NOT NULL
@@ -47,6 +48,8 @@ def initialize_database(database_path: str) -> None:
                 WHERE provider LIKE '%VirusTotal%'
                 """
             )
+        if "cacheable" not in columns:
+            connection.execute("ALTER TABLE scans ADD COLUMN cacheable INTEGER NOT NULL DEFAULT 1")
 
 
 def row_to_scan(row: sqlite3.Row) -> ScanResult:
@@ -63,17 +66,23 @@ def row_to_scan(row: sqlite3.Row) -> ScanResult:
     )
 
 
-def save_scan(database_path: str, result: ScanResult, analysis_mode: str = "local") -> None:
+def save_scan(
+    database_path: str,
+    result: ScanResult,
+    analysis_mode: str = "local",
+    *,
+    cacheable: bool = True,
+) -> None:
     with sqlite3.connect(database_path) as connection:
         connection.execute(
             """
             INSERT INTO scans
-            (id, target, target_type, score, verdict, provider, analysis_mode, analysis_status, scanned_at, findings)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, target, target_type, score, verdict, provider, analysis_mode, cacheable, analysis_status, scanned_at, findings)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 result.id, result.target, result.target_type, result.score, result.verdict,
-                result.provider, analysis_mode, result.analysis_status, result.scanned_at.isoformat(),
+                result.provider, analysis_mode, int(cacheable), result.analysis_status, result.scanned_at.isoformat(),
                 json.dumps([finding.model_dump() for finding in result.findings]),
             ),
         )
@@ -90,7 +99,7 @@ def get_cached_scan(
         row = connection.execute(
             """
             SELECT * FROM scans
-            WHERE target = ? AND analysis_mode = ?
+            WHERE target = ? AND analysis_mode = ? AND cacheable = 1
             ORDER BY scanned_at DESC
             LIMIT 1
             """,

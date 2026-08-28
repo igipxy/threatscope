@@ -3,7 +3,9 @@ import hashlib
 import ipaddress
 import re
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -102,7 +104,14 @@ async def local_analysis(original: str, target: str, target_type: str) -> tuple[
     return min(100, score + domain_score), [*findings, *domain_findings]
 
 
-def provider_result(stats: dict) -> tuple[int, list[Finding]]:
+@dataclass(frozen=True)
+class ProviderOutcome:
+    status: Literal["success", "not_found", "rate_limited", "unavailable"]
+    score: int
+    findings: list[Finding]
+
+
+def provider_result(stats: dict) -> ProviderOutcome:
     malicious = int(stats.get("malicious", 0))
     suspicious = int(stats.get("suspicious", 0))
     harmless = int(stats.get("harmless", 0))
@@ -110,14 +119,18 @@ def provider_result(stats: dict) -> tuple[int, list[Finding]]:
     total = sum(int(value) for value in stats.values()) or 1
     score = 90 if malicious >= 5 else 60 if malicious else 50 if suspicious >= 3 else 35 if suspicious else 0
     severity = "high" if malicious else ("medium" if suspicious else "info")
-    return score, [Finding(
-        label="VirusTotal engine analysis",
-        severity=severity,
-        detail=f"{malicious} malicious, {suspicious} suspicious, {harmless} harmless, and {undetected} undetected results across {total} engines.",
-    )]
+    return ProviderOutcome(
+        status="success",
+        score=score,
+        findings=[Finding(
+            label="VirusTotal engine analysis",
+            severity=severity,
+            detail=f"{malicious} malicious, {suspicious} suspicious, {harmless} harmless, and {undetected} undetected results across {total} engines.",
+        )],
+    )
 
 
-async def virustotal_report(target: str, target_type: str) -> tuple[int, list[Finding]]:
+async def virustotal_report(target: str, target_type: str) -> ProviderOutcome:
     endpoint_type = "urls" if target_type == "url" else ("domains" if target_type == "domain" else "ip_addresses")
     identifier = base64.urlsafe_b64encode(target.encode()).decode().strip("=") if target_type == "url" else target
     try:
@@ -127,19 +140,47 @@ async def virustotal_report(target: str, target_type: str) -> tuple[int, list[Fi
                 headers={"x-apikey": settings.virustotal_api_key},
             )
     except httpx.HTTPError:
-        return 0, [Finding(
-            label="VirusTotal unavailable",
-            severity="info",
-            detail="The external provider could not be reached. Local analysis is still complete.",
-        )]
+        return ProviderOutcome(
+            status="unavailable",
+            score=0,
+            findings=[Finding(
+                label="VirusTotal unavailable",
+                severity="info",
+                detail="The external provider could not be reached. Local analysis is still complete.",
+            )],
+        )
     if response.status_code == 200:
         stats = response.json().get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
         return provider_result(stats)
     if response.status_code == 404:
-        return 0, [Finding(label="VirusTotal report unavailable", severity="info", detail="No existing VirusTotal report was found. ThreatScope did not submit this URL for scanning.")]
+        return ProviderOutcome(
+            status="not_found",
+            score=0,
+            findings=[Finding(
+                label="VirusTotal report unavailable",
+                severity="info",
+                detail="No existing VirusTotal report was found. ThreatScope did not submit this URL for scanning.",
+            )],
+        )
     if response.status_code == 429:
-        return 0, [Finding(label="VirusTotal quota reached", severity="info", detail="The external provider is currently rate-limited. Local analysis is still complete.")]
-    return 0, [Finding(label="VirusTotal unavailable", severity="info", detail="The external provider could not return a report. Local analysis is still complete.")]
+        return ProviderOutcome(
+            status="rate_limited",
+            score=0,
+            findings=[Finding(
+                label="VirusTotal quota reached",
+                severity="info",
+                detail="The external provider is currently rate-limited. Local analysis is still complete.",
+            )],
+        )
+    return ProviderOutcome(
+        status="unavailable",
+        score=0,
+        findings=[Finding(
+            label="VirusTotal unavailable",
+            severity="info",
+            detail="The external provider could not return a report. Local analysis is still complete.",
+        )],
+    )
 
 
 @app.get("/")
@@ -182,18 +223,23 @@ async def create_scan(payload: ScanRequest):
     score, findings = await local_analysis(payload.target, normalized, target_type)
     provider = "ThreatScope local analysis"
     completed_mode = "local"
+    cacheable = True
 
     if requested_mode == "virustotal":
+        completed_mode = "virustotal"
         permitted, reason = reserve_provider_request(
             settings.database_path, "virustotal", settings.vt_requests_per_minute, settings.vt_requests_per_day
         )
         if permitted:
-            provider_score, provider_findings = await virustotal_report(normalized, target_type)
-            score = max(score, provider_score)
-            findings.extend(provider_findings)
-            provider = "ThreatScope + VirusTotal report"
-            completed_mode = "virustotal"
+            outcome = await virustotal_report(normalized, target_type)
+            score = max(score, outcome.score)
+            findings.extend(outcome.findings)
+            if outcome.status == "success":
+                provider = "ThreatScope + VirusTotal report"
+            else:
+                cacheable = False
         else:
+            cacheable = False
             findings.append(Finding(label="VirusTotal budget protected", severity="info", detail=f"Live lookup skipped: {reason}. Local analysis is still complete."))
     elif settings.virustotal_api_key:
         findings.append(Finding(label="VirusTotal lookup disabled", severity="info", detail="Enable the optional lookup only when you need an existing external report."))
@@ -209,5 +255,5 @@ async def create_scan(payload: ScanRequest):
         scanned_at=scanned_at,
         findings=findings,
     )
-    save_scan(settings.database_path, result, completed_mode)
+    save_scan(settings.database_path, result, completed_mode, cacheable=cacheable)
     return result

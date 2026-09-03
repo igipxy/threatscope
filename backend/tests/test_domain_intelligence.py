@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from app.domain_intelligence import interpret_rdap
+from app.domain_intelligence import interpret_rdap, registrable_domain, validate_rdap_base_url
 
 
 def test_recent_domain_is_a_high_risk_signal():
@@ -26,3 +26,17 @@ def test_established_domain_does_not_add_risk():
 
     assert score == 0
     assert any(item.label == "Domain registration age" and item.severity == "info" for item in findings)
+
+
+def test_registrable_domain_uses_public_suffix_list():
+    assert registrable_domain("login.accounts.example.co.uk") == "example.co.uk"
+
+
+def test_rdap_base_rejects_non_https_and_private_addresses():
+    for value in ("http://rdap.example", "https://127.0.0.1", "https://user@rdap.example"):
+        try:
+            validate_rdap_base_url(value)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Unsafe RDAP URL was accepted: {value}")

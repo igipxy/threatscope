@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     cache_ttl_seconds: int = 86400
     vt_requests_per_minute: int = 3
     vt_requests_per_day: int = 400
-    access_token: str = ""
+    threatscope_access_token: str = ""
     scan_requests_per_minute: int = 20
     max_concurrent_scans: int = 4
     max_stored_scans: int = 500
@@ -57,8 +57,8 @@ async def require_access(
     request: Request,
     x_threatscope_key: str | None = Header(default=None),
 ) -> None:
-    if settings.access_token:
-        if x_threatscope_key and hmac.compare_digest(x_threatscope_key, settings.access_token):
+    if settings.threatscope_access_token:
+        if x_threatscope_key and hmac.compare_digest(x_threatscope_key, settings.threatscope_access_token):
             return
         raise HTTPException(status_code=401, detail="A valid X-ThreatScope-Key header is required.")
     if _loopback_request(request):

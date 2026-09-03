@@ -1,15 +1,19 @@
+import asyncio
 import base64
 import hashlib
+import hmac
 import ipaddress
 import re
+import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -26,10 +30,73 @@ class Settings(BaseSettings):
     cache_ttl_seconds: int = 86400
     vt_requests_per_minute: int = 3
     vt_requests_per_day: int = 400
+    access_token: str = ""
+    scan_requests_per_minute: int = 20
+    max_concurrent_scans: int = 4
+    max_stored_scans: int = 500
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 settings = Settings()
+_scan_slots = asyncio.BoundedSemaphore(max(1, settings.max_concurrent_scans))
+_scan_rate_lock = asyncio.Lock()
+_scan_requests: dict[str, deque[float]] = defaultdict(deque)
+
+
+def _loopback_request(request: Request) -> bool:
+    if request.headers.get("forwarded") or request.headers.get("x-forwarded-for"):
+        return False
+    try:
+        return bool(request.client and ipaddress.ip_address(request.client.host).is_loopback)
+    except ValueError:
+        return False
+
+
+async def require_access(
+    request: Request,
+    x_threatscope_key: str | None = Header(default=None),
+) -> None:
+    if settings.access_token:
+        if x_threatscope_key and hmac.compare_digest(x_threatscope_key, settings.access_token):
+            return
+        raise HTTPException(status_code=401, detail="A valid X-ThreatScope-Key header is required.")
+    if _loopback_request(request):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Remote access is disabled until THREATSCOPE_ACCESS_TOKEN is configured.",
+    )
+
+
+async def enforce_scan_rate(request: Request) -> None:
+    client = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    cutoff = now - 60
+    async with _scan_rate_lock:
+        bucket = _scan_requests[client]
+        while bucket and bucket[0] <= cutoff:
+            bucket.popleft()
+        if len(bucket) >= max(1, settings.scan_requests_per_minute):
+            raise HTTPException(status_code=429, detail="Scan request limit reached. Try again later.")
+        bucket.append(now)
+
+
+async def reserve_scan_capacity():
+    try:
+        await asyncio.wait_for(_scan_slots.acquire(), timeout=0.1)
+    except TimeoutError as error:
+        raise HTTPException(status_code=503, detail="The scanner is at capacity. Try again shortly.") from error
+    try:
+        yield
+    finally:
+        _scan_slots.release()
+
+
+def redact_target(target: str, target_type: str) -> str:
+    if target_type != "url":
+        return target
+    parsed = urlparse(target)
+    return urlunparse(parsed._replace(query="", fragment=""))
 
 
 @asynccontextmanager
@@ -38,7 +105,12 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="ThreatScope API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(
+    title="ThreatScope API",
+    version="0.2.0",
+    lifespan=lifespan,
+    dependencies=[Depends(require_access)],
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin, "http://localhost:5173", "http://127.0.0.1:5173"],
@@ -62,10 +134,14 @@ def classify_target(value: str) -> tuple[str, str]:
         pass
     if "://" in value:
         return "url", normalize_url(value)
-    parsed = urlparse(f"https://{value}")
-    if not parsed.hostname or "." not in parsed.hostname:
+    try:
+        parsed = urlparse(f"https://{value}")
+        hostname = parsed.hostname
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="Enter a valid URL, domain, or IP address.") from error
+    if not hostname or "." not in hostname:
         raise HTTPException(status_code=422, detail="Enter a valid URL, domain, or IP address.")
-    return "domain", parsed.hostname.lower()
+    return "domain", hostname.lower()
 
 
 def verdict_for_score(score: int) -> str:
@@ -150,8 +226,22 @@ async def virustotal_report(target: str, target_type: str) -> ProviderOutcome:
             )],
         )
     if response.status_code == 200:
-        stats = response.json().get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
-        return provider_result(stats)
+        try:
+            payload = response.json()
+            stats = payload.get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
+            if not isinstance(stats, dict):
+                raise ValueError("Invalid provider statistics")
+            return provider_result(stats)
+        except (AttributeError, TypeError, ValueError):
+            return ProviderOutcome(
+                status="unavailable",
+                score=0,
+                findings=[Finding(
+                    label="VirusTotal unavailable",
+                    severity="info",
+                    detail="The external provider returned an invalid response. Local analysis is still complete.",
+                )],
+            )
     if response.status_code == 404:
         return ProviderOutcome(
             status="not_found",
@@ -202,7 +292,12 @@ def recent_scans(limit: int = Query(default=20, ge=1, le=100)):
     return list_scans(settings.database_path, limit)
 
 
-@app.post("/api/scans", response_model=ScanResult, status_code=201)
+@app.post(
+    "/api/scans",
+    response_model=ScanResult,
+    status_code=201,
+    dependencies=[Depends(enforce_scan_rate), Depends(reserve_scan_capacity)],
+)
 async def create_scan(payload: ScanRequest):
     target_type, normalized = classify_target(payload.target)
     requested_mode = (
@@ -244,10 +339,18 @@ async def create_scan(payload: ScanRequest):
     elif settings.virustotal_api_key:
         findings.append(Finding(label="VirusTotal lookup disabled", severity="info", detail="Enable the optional lookup only when you need an existing external report."))
 
+    stored_target = redact_target(normalized, target_type)
+    if stored_target != normalized:
+        findings.append(Finding(
+            label="Sensitive URL data redacted",
+            severity="info",
+            detail="The URL query string was analyzed but was not retained in scan history.",
+        ))
+
     scanned_at = datetime.now(timezone.utc)
     result = ScanResult(
         id=hashlib.sha256(f"{normalized}:{scanned_at.isoformat()}".encode()).hexdigest()[:12],
-        target=normalized,
+        target=stored_target,
         target_type=target_type,
         score=score,
         verdict=verdict_for_score(score),
@@ -255,5 +358,12 @@ async def create_scan(payload: ScanRequest):
         scanned_at=scanned_at,
         findings=findings,
     )
-    save_scan(settings.database_path, result, completed_mode, cacheable=cacheable)
+    save_scan(
+        settings.database_path,
+        result,
+        completed_mode,
+        cache_target=normalized,
+        cacheable=cacheable,
+        max_stored_scans=settings.max_stored_scans,
+    )
     return result

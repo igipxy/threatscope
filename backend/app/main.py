@@ -38,6 +38,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+MAX_PROVIDER_RESPONSE_BYTES = 1_000_000
 _scan_slots = asyncio.BoundedSemaphore(max(1, settings.max_concurrent_scans))
 _scan_rate_lock = asyncio.Lock()
 _scan_requests: dict[str, deque[float]] = defaultdict(deque)
@@ -227,6 +228,8 @@ async def virustotal_report(target: str, target_type: str) -> ProviderOutcome:
         )
     if response.status_code == 200:
         try:
+            if len(response.content) > MAX_PROVIDER_RESPONSE_BYTES:
+                raise ValueError("Provider response is too large")
             payload = response.json()
             stats = payload.get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
             if not isinstance(stats, dict):

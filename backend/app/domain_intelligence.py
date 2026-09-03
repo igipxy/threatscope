@@ -12,7 +12,7 @@ from .models import Finding
 
 RDAP_BOOTSTRAP_URL = "https://data.iana.org/rdap/dns.json"
 MAX_RDAP_RESPONSE_BYTES = 1_000_000
-_extract_domain = tldextract.TLDExtract(suffix_list_urls=(), include_psl_private_domains=True)
+_extract_domain = tldextract.TLDExtract(suffix_list_urls=(), include_psl_private_domains=False)
 _bootstrap: dict[str, str] = {}
 _bootstrap_lock = asyncio.Lock()
 

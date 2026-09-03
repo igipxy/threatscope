@@ -1,5 +1,6 @@
 import asyncio
 import ipaddress
+import re
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -15,6 +16,7 @@ MAX_RDAP_RESPONSE_BYTES = 1_000_000
 _extract_domain = tldextract.TLDExtract(suffix_list_urls=(), include_psl_private_domains=False)
 _bootstrap: dict[str, str] = {}
 _bootstrap_lock = asyncio.Lock()
+_REGISTERED_DOMAIN_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 def registrable_domain(hostname: str) -> str:
@@ -146,11 +148,21 @@ async def rdap_base_for_tld(client: httpx.AsyncClient, tld: str) -> str | None:
     return _bootstrap.get(tld)
 
 
+def is_valid_registered_domain(value: str) -> bool:
+    if not value or "." not in value:
+        return False
+    if not _REGISTERED_DOMAIN_RE.fullmatch(value):
+        return False
+    return True
+
+
 async def domain_intelligence(hostname: str) -> tuple[int, list[Finding]]:
     if "." not in hostname:
         return 0, []
     try:
         registered = registrable_domain(hostname)
+        if not is_valid_registered_domain(registered):
+            raise ValueError("Invalid registrable domain")
         tld = registered.rsplit(".", 1)[-1]
         async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=False) as client:
             base_url = await rdap_base_for_tld(client, tld)

@@ -30,13 +30,16 @@ def normalize_url(value: str) -> str:
     try:
         parsed = urlparse(value)
         hostname = parsed.hostname
-        port = parsed.port
     except ValueError as error:
         raise HTTPException(status_code=422, detail="The URL is malformed.") from error
     if parsed.scheme.lower() not in {"http", "https"}:
         raise HTTPException(status_code=422, detail="Only HTTP and HTTPS URLs can be scanned.")
     if not hostname:
         raise HTTPException(status_code=422, detail="The URL must include a valid hostname.")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="The URL must include a valid port.") from error
 
     try:
         address = ipaddress.ip_address(hostname)

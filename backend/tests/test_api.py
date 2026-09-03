@@ -15,7 +15,7 @@ def isolate_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "cache_ttl_seconds", 86400)
     monkeypatch.setattr(settings, "vt_requests_per_minute", 3)
     monkeypatch.setattr(settings, "vt_requests_per_day", 400)
-    monkeypatch.setattr(settings, "access_token", "")
+    monkeypatch.setattr(settings, "threatscope_access_token", "")
     monkeypatch.setattr(settings, "scan_requests_per_minute", 20)
     monkeypatch.setattr(settings, "max_stored_scans", 500)
     monkeypatch.setattr(main_module, "_loopback_request", lambda request: True)
@@ -217,7 +217,7 @@ def test_remote_requests_fail_closed_without_access_token(monkeypatch):
 
 def test_remote_requests_accept_configured_access_token(monkeypatch):
     monkeypatch.setattr(main_module, "_loopback_request", lambda request: False)
-    monkeypatch.setattr(settings, "access_token", "test-access-token")
+    monkeypatch.setattr(settings, "threatscope_access_token", "test-access-token")
 
     with TestClient(app) as client:
         denied = client.get("/health")

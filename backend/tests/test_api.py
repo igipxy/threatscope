@@ -15,6 +15,11 @@ def isolate_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "cache_ttl_seconds", 86400)
     monkeypatch.setattr(settings, "vt_requests_per_minute", 3)
     monkeypatch.setattr(settings, "vt_requests_per_day", 400)
+    monkeypatch.setattr(settings, "threatscope_access_token", "")
+    monkeypatch.setattr(settings, "scan_requests_per_minute", 20)
+    monkeypatch.setattr(settings, "max_stored_scans", 500)
+    monkeypatch.setattr(main_module, "_loopback_request", lambda request: True)
+    main_module._scan_requests.clear()
 
 
 def test_scan_is_cached_after_first_result():
@@ -199,3 +204,68 @@ def test_unsuccessful_provider_outcomes_are_persisted_but_not_cached(
     assert history.status_code == 200
     assert len(history.json()) == 2
     assert all(item["provider"] == "ThreatScope local analysis" for item in history.json())
+
+
+def test_remote_requests_fail_closed_without_access_token(monkeypatch):
+    monkeypatch.setattr(main_module, "_loopback_request", lambda request: False)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 403
+
+
+def test_remote_requests_accept_configured_access_token(monkeypatch):
+    monkeypatch.setattr(main_module, "_loopback_request", lambda request: False)
+    monkeypatch.setattr(settings, "threatscope_access_token", "test-access-token")
+
+    with TestClient(app) as client:
+        denied = client.get("/health")
+        allowed = client.get("/health", headers={"X-ThreatScope-Key": "test-access-token"})
+
+    assert denied.status_code == 401
+    assert allowed.status_code == 200
+
+
+def test_scan_query_is_analyzed_but_not_persisted(monkeypatch):
+    async def fake_local_analysis(original, target, target_type):
+        return 5, [Finding(label="Test analysis", severity="info", detail="Complete.")]
+
+    monkeypatch.setattr(main_module, "local_analysis", fake_local_analysis)
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/scans",
+            json={"target": "https://example.com/reset?token=super-secret"},
+        )
+        history = client.get("/api/scans")
+        cached = client.post(
+            "/api/scans",
+            json={"target": "https://example.com/reset?token=super-secret"},
+        )
+
+    assert created.status_code == 201
+    assert created.json()["target"] == "https://example.com/reset"
+    assert "super-secret" not in str(history.json())
+    assert cached.json()["cached"] is True
+    assert cached.json()["id"] == created.json()["id"]
+
+
+def test_scan_rate_limit_is_enforced_before_analysis(monkeypatch):
+    calls = 0
+
+    async def fake_local_analysis(original, target, target_type):
+        nonlocal calls
+        calls += 1
+        return 5, [Finding(label="Test analysis", severity="info", detail="Complete.")]
+
+    monkeypatch.setattr(main_module, "local_analysis", fake_local_analysis)
+    monkeypatch.setattr(settings, "scan_requests_per_minute", 1)
+
+    with TestClient(app) as client:
+        first = client.post("/api/scans", json={"target": "8.8.8.8"})
+        second = client.post("/api/scans", json={"target": "8.8.4.4"})
+
+    assert first.status_code == 201
+    assert second.status_code == 429
+    assert calls == 1

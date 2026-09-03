@@ -27,22 +27,35 @@ SUSPICIOUS_TERMS = {
 
 def normalize_url(value: str) -> str:
     value = value.strip()
-    parsed = urlparse(value)
+    try:
+        parsed = urlparse(value)
+        hostname = parsed.hostname
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="The URL is malformed.") from error
     if parsed.scheme.lower() not in {"http", "https"}:
         raise HTTPException(status_code=422, detail="Only HTTP and HTTPS URLs can be scanned.")
-    if not parsed.hostname:
+    if not hostname:
         raise HTTPException(status_code=422, detail="The URL must include a valid hostname.")
     try:
         port = parsed.port
     except ValueError as error:
         raise HTTPException(status_code=422, detail="The URL must include a valid port.") from error
-    if parsed.username or parsed.password:
-        # Keep parsing credentials as a signal, but never echo them into a normalized result.
-        hostname = parsed.hostname
-        if port:
-            hostname = f"{hostname}:{port}"
-        parsed = parsed._replace(netloc=hostname)
-    return urlunparse(parsed._replace(scheme=parsed.scheme.lower(), fragment=""))
+
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        try:
+            normalized_host = hostname.rstrip(".").encode("idna").decode("ascii").lower()
+        except UnicodeError as error:
+            raise HTTPException(status_code=422, detail="The URL contains an invalid hostname.") from error
+    else:
+        normalized_host = address.compressed
+        if address.version == 6:
+            normalized_host = f"[{normalized_host}]"
+
+    # Always rebuild the authority so credentials are never retained or disclosed.
+    netloc = f"{normalized_host}:{port}" if port else normalized_host
+    return urlunparse(parsed._replace(scheme=parsed.scheme.lower(), netloc=netloc, fragment=""))
 
 
 def _is_non_public_ip(value: str) -> bool:

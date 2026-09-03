@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,7 @@ def initialize_database(database_path: str) -> None:
             CREATE TABLE IF NOT EXISTS scans (
                 id TEXT PRIMARY KEY,
                 target TEXT NOT NULL,
+                cache_key TEXT NOT NULL,
                 target_type TEXT NOT NULL,
                 score INTEGER NOT NULL,
                 verdict TEXT NOT NULL,
@@ -37,6 +39,8 @@ def initialize_database(database_path: str) -> None:
             """
         )
         columns = {row[1] for row in connection.execute("PRAGMA table_info(scans)")}
+        if "cache_key" not in columns:
+            connection.execute("ALTER TABLE scans ADD COLUMN cache_key TEXT NOT NULL DEFAULT ''")
         if "analysis_status" not in columns:
             connection.execute("ALTER TABLE scans ADD COLUMN analysis_status TEXT NOT NULL DEFAULT 'completed'")
         if "analysis_mode" not in columns:
@@ -71,21 +75,36 @@ def save_scan(
     result: ScanResult,
     analysis_mode: str = "local",
     *,
+    cache_target: str | None = None,
     cacheable: bool = True,
+    max_stored_scans: int = 500,
 ) -> None:
     with sqlite3.connect(database_path) as connection:
         connection.execute(
             """
             INSERT INTO scans
-            (id, target, target_type, score, verdict, provider, analysis_mode, cacheable, analysis_status, scanned_at, findings)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, target, cache_key, target_type, score, verdict, provider, analysis_mode, cacheable, analysis_status, scanned_at, findings)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                result.id, result.target, result.target_type, result.score, result.verdict,
+                result.id, result.target, _cache_key(cache_target or result.target), result.target_type, result.score, result.verdict,
                 result.provider, analysis_mode, int(cacheable), result.analysis_status, result.scanned_at.isoformat(),
                 json.dumps([finding.model_dump() for finding in result.findings]),
             ),
         )
+        connection.execute(
+            """
+            DELETE FROM scans
+            WHERE id NOT IN (
+                SELECT id FROM scans ORDER BY scanned_at DESC LIMIT ?
+            )
+            """,
+            (max(1, max_stored_scans),),
+        )
+
+
+def _cache_key(target: str) -> str:
+    return hashlib.sha256(target.encode("utf-8")).hexdigest()
 
 
 def get_cached_scan(
@@ -99,11 +118,12 @@ def get_cached_scan(
         row = connection.execute(
             """
             SELECT * FROM scans
-            WHERE target = ? AND analysis_mode = ? AND cacheable = 1
+            WHERE (cache_key = ? OR (cache_key = '' AND target = ?))
+              AND analysis_mode = ? AND cacheable = 1
             ORDER BY scanned_at DESC
             LIMIT 1
             """,
-            (target, analysis_mode),
+            (_cache_key(target), target, analysis_mode),
         ).fetchone()
     if not row:
         return None

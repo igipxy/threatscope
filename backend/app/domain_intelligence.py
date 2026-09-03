@@ -1,15 +1,62 @@
 import asyncio
+import ipaddress
+import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote, urlparse
 
 import httpx
+import tldextract
 
 from .models import Finding
 
 
 RDAP_BOOTSTRAP_URL = "https://data.iana.org/rdap/dns.json"
+MAX_RDAP_RESPONSE_BYTES = 1_000_000
+_extract_domain = tldextract.TLDExtract(suffix_list_urls=(), include_psl_private_domains=False)
 _bootstrap: dict[str, str] = {}
 _bootstrap_lock = asyncio.Lock()
+_REGISTERED_DOMAIN_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def registrable_domain(hostname: str) -> str:
+    """Return a normalized registrable domain without making a network request."""
+    normalized = hostname.rstrip(".").encode("idna").decode("ascii").lower()
+    extracted = _extract_domain(normalized)
+    return extracted.top_domain_under_public_suffix or normalized
+
+
+def validate_rdap_base_url(value: str) -> str:
+    """Accept only ordinary public HTTPS RDAP service URLs from the bootstrap."""
+    parsed = urlparse(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.port not in {None, 443}
+    ):
+        raise ValueError("Unsafe RDAP service URL")
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        pass
+    else:
+        if not address.is_global:
+            raise ValueError("Non-public RDAP service address")
+    return value.rstrip("/")
+
+
+def response_json(response: httpx.Response) -> dict[str, Any]:
+    declared_size = response.headers.get("content-length")
+    if declared_size and int(declared_size) > MAX_RDAP_RESPONSE_BYTES:
+        raise ValueError("RDAP response is too large")
+    if len(response.content) > MAX_RDAP_RESPONSE_BYTES:
+        raise ValueError("RDAP response is too large")
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise ValueError("RDAP response must be an object")
+    return payload
 
 
 def parse_rdap_date(value: str | None) -> datetime | None:
@@ -94,25 +141,36 @@ async def rdap_base_for_tld(client: httpx.AsyncClient, tld: str) -> str | None:
             return _bootstrap[tld]
         response = await client.get(RDAP_BOOTSTRAP_URL)
         response.raise_for_status()
-        for tlds, urls in response.json().get("services", []):
+        for tlds, urls in response_json(response).get("services", []):
             if urls:
                 for item in tlds:
-                    _bootstrap[item.lower()] = urls[0]
+                    _bootstrap[item.lower()] = validate_rdap_base_url(urls[0])
     return _bootstrap.get(tld)
+
+
+def is_valid_registered_domain(value: str) -> bool:
+    if not value or "." not in value:
+        return False
+    if not _REGISTERED_DOMAIN_RE.fullmatch(value):
+        return False
+    return True
 
 
 async def domain_intelligence(hostname: str) -> tuple[int, list[Finding]]:
     if "." not in hostname:
         return 0, []
-    tld = hostname.rsplit(".", 1)[-1].lower()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=True) as client:
+        registered = registrable_domain(hostname)
+        if not is_valid_registered_domain(registered):
+            raise ValueError("Invalid registrable domain")
+        tld = registered.rsplit(".", 1)[-1]
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=False) as client:
             base_url = await rdap_base_for_tld(client, tld)
             if not base_url:
                 return 0, [Finding(label="Registration data unavailable", severity="info", detail="No RDAP registry was found for this top-level domain.")]
-            response = await client.get(f"{base_url.rstrip('/')}/domain/{hostname}")
-    except httpx.HTTPError:
-        return 0, [Finding(label="Registration data unavailable", severity="info", detail="The public RDAP registry could not be reached.")]
+            response = await client.get(f"{base_url}/domain/{quote(registered, safe='.-')}")
+    except (httpx.HTTPError, UnicodeError, ValueError):
+        return 0, [Finding(label="Registration data unavailable", severity="info", detail="The public RDAP registry could not be reached or returned invalid data.")]
 
     if response.status_code == 404:
         return 0, [Finding(label="Registration data unavailable", severity="info", detail="The RDAP registry has no record for this domain.")]
@@ -121,4 +179,7 @@ async def domain_intelligence(hostname: str) -> tuple[int, list[Finding]]:
     if response.status_code >= 400:
         return 0, [Finding(label="Registration data unavailable", severity="info", detail="The public RDAP registry returned an error.")]
 
-    return interpret_rdap(response.json())
+    try:
+        return interpret_rdap(response_json(response))
+    except (TypeError, ValueError):
+        return 0, [Finding(label="Registration data unavailable", severity="info", detail="The public RDAP registry returned invalid data.")]

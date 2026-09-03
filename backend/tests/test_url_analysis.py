@@ -44,3 +44,15 @@ def test_phishing_style_url_gets_explainable_signals():
     labels = {finding.label for finding in findings}
     assert "Unencrypted connection" in labels
     assert "Sensitive-action wording" in labels
+
+
+@pytest.mark.parametrize("target", ["https://[::1", "https://example.com:not-a-port"])
+def test_malformed_urls_return_validation_error(target):
+    with pytest.raises(HTTPException) as error:
+        normalize_url(target)
+
+    assert error.value.status_code == 422
+
+
+def test_unicode_hostname_is_normalized_to_idna():
+    assert normalize_url("https://bücher.example/path") == "https://xn--bcher-kva.example/path"
